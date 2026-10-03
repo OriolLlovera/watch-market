@@ -66,7 +66,7 @@ export default function Market({ listings, refreshing = false }: { listings: Lis
                 <option value="recent">Más recientes</option><option value="priceAsc">Precio menor</option><option value="priceDesc">Precio mayor</option><option value="relevance">Relevancia</option>
               </select></label>
           </div>
-          {rows.length === 0 ? <p className="py-24 text-center text-mute">{refreshing ? "Cargando anuncios de las fuentes… aparecerán en unos segundos." : "Ningún anuncio coincide. Quita algún filtro o prueba con otra referencia."}</p> : (
+          {rows.length === 0 ? <p className="py-24 text-center text-mute">{refreshing ? "Cargando anuncios de las fuentes… aparecerán en unos segundos." : (listings.length === 0 ? "Todavía no hay anuncios guardados. En Netlify los carga el job de scraping (GitHub Actions); abre /api/status para ver el estado." : "Ningún anuncio coincide. Quita algún filtro o prueba con otra referencia.")}</p> : (
             <div className="grid grid-cols-2 gap-x-5 gap-y-10 md:grid-cols-3 2xl:grid-cols-4">
               {rows.slice(0, show).map((l) => <ListingCard key={l.id} l={l} onOpen={() => setOpen(l)} />)}
             </div>)}

@@ -5,7 +5,7 @@ import { reddit } from "./reddit";
 import { ebay } from "./ebay";
 import { forum } from "./forum";
 import { FORUM_SOURCES } from "./sources";
-import { SERVERLESS, readJson, shared, writeJson } from "./store";
+import { SERVERLESS, probe, readJson, shared, storageInfo, writeJson } from "./store";
 
 const planned = (name: string, country: string): Connector => ({
   id: name.toLowerCase().replace(/\W+/g, "-"), name, country, access: "pendiente", status: "planned",
@@ -91,4 +91,14 @@ export async function refreshAll() {
   await hydrate(); // carga lo anterior: sirve de respaldo si una fuente falla
   await Promise.all(active().map(refresh));
   return active().map((c) => ({ name: c.name, count: st(c.id).listings.length, ok: !!st(c.id).ok, saved: !!st(c.id).saved }));
+}
+
+/** Para /api/status: qué hay realmente guardado y cuándo se actualizó. */
+export async function status() {
+  await hydrate();
+  const sources = await Promise.all(active().map(async (c) => {
+    const s = st(c.id), p = await probe(`listings_${c.id}`);
+    return { source: c.name, stored: p.found, count: s.listings.length, updatedAt: s.at ? new Date(s.at).toISOString() : null, ageMinutes: s.at ? Math.round((Date.now() - s.at) / 60e3) : null, ...(p.error ? { error: p.error } : {}) };
+  }));
+  return { storage: storageInfo(), activeSources: sources.length, totalListings: sources.reduce((n, x) => n + x.count, 0), sources };
 }

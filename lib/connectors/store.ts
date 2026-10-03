@@ -8,7 +8,10 @@ import type { Store } from "@netlify/blobs";
  *  - Netlify (runtime):      Netlify Blobs, SOLO LECTURA desde la web. Disco = /tmp (efímero, para miniaturas).
  *  - Job de scraping:        Netlify Blobs con credenciales explícitas (NETLIFY_SITE_ID + NETLIFY_AUTH_TOKEN).
  */
-export const SERVERLESS = !!(process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY_BLOBS_CONTEXT);
+// En Netlify solo llegan al runtime las variables definidas en su interfaz y unas pocas de sistema, así que se miran varias.
+// Si aun así no se detectara, define WM_SERVERLESS=1 en Netlify (Site configuration > Environment variables, scope Functions).
+export const SERVERLESS = !!(process.env.WM_SERVERLESS === "1" || process.env.NETLIFY || process.env.NETLIFY_BLOBS_CONTEXT
+  || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT || process.env.AWS_EXECUTION_ENV);
 const CREDS = process.env.NETLIFY_SITE_ID && process.env.NETLIFY_AUTH_TOKEN
   ? { siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_AUTH_TOKEN } : null;
 const USE_BLOBS = SERVERLESS || !!CREDS;
@@ -45,4 +48,16 @@ export const cacheDir = (sub: string) => path.join(DIR, sub);
 export function shared<T>(name: string, init: () => T): T {
   const g = globalThis as unknown as Record<string, unknown>;
   return (g[`__wm_${name}`] ??= init()) as T;
+}
+
+/** Diagnóstico para /api/status (solo booleanos: nunca expone valores de variables). */
+export const storageInfo = () => ({
+  mode: USE_BLOBS ? "blobs" : "disk", serverless: SERVERLESS, credentialsSet: !!CREDS,
+  env: { NETLIFY: !!process.env.NETLIFY, NETLIFY_BLOBS_CONTEXT: !!process.env.NETLIFY_BLOBS_CONTEXT, AWS_LAMBDA_FUNCTION_NAME: !!process.env.AWS_LAMBDA_FUNCTION_NAME, LAMBDA_TASK_ROOT: !!process.env.LAMBDA_TASK_ROOT, WM_SERVERLESS: !!process.env.WM_SERVERLESS },
+});
+export async function probe(key: string): Promise<{ found: boolean; error?: string }> {
+  try {
+    if (USE_BLOBS) return { found: (await (await blobs()).get(safe(key), { type: "json" })) != null };
+    await fs.access(path.join(DIR, safe(key) + ".json")); return { found: true };
+  } catch (e) { return { found: false, error: (e as Error).message.slice(0, 200) }; }
 }
