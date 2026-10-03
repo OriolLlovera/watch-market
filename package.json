@@ -6,9 +6,12 @@
     "build": "next build",
     "start": "next start",
     "scrape:test": "tsx scripts/scrape-test.ts",
-    "discover": "tsx scripts/discover-forum.ts"
+    "discover": "tsx scripts/discover-forum.ts",
+    "scrape": "tsx scripts/scrape.ts",
+    "discover:all": "tsx scripts/discover-all.ts"
   },
   "dependencies": {
+    "@netlify/blobs": "^8.1.0",
     "cheerio": "^1.0.0",
     "lucide-react": "^0.453.0",
     "next": "^14.2.15",

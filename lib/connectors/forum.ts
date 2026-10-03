@@ -119,7 +119,7 @@ export const forum = (s: ForumSource): Connector => ({
       onProgress?.([...all]);
     }
     // Solo se conservan los hilos que siguen en los feeds: la caché no crece sin límite.
-    await writeJson(key, keep);
+    if (all.length) await writeJson(key, keep); // si todo falló (red, 403...) no se borra la memoria de hilos anterior
     console.log(`[${s.name}] ${all.length} anuncios (${fetched} hilos nuevos descargados)`);
     return all;
   },

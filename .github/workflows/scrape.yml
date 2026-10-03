@@ -1,0 +1,33 @@
+name: scrape
+
+# Scrapea las fuentes y guarda los anuncios en Netlify Blobs. La web (Netlify) solo lee de ahí.
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # cada 30 min (GitHub puede retrasarlo unos minutos)
+  workflow_dispatch:          # botón "Run workflow" para lanzarlo a mano
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run scrape
+        env:
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          SCRAPER_UA: ${{ secrets.SCRAPER_UA }}
+          # Opcionales, solo si usas esas fuentes:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+          EBAY_CERT_ID: ${{ secrets.EBAY_CERT_ID }}

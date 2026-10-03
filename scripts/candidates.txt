@@ -1,0 +1,13 @@
+# Foros candidatos para `npm run discover:all`.  Formato:  Nombre | URL | PAÍS | DIVISA
+# El nombre debe coincidir con el de la lista "pendientes" de registry.ts para que desaparezca de ahí al activarse.
+# Divisas soportadas por la app: EUR, USD, GBP (foros en SEK/CHF/DKK/NOK darían precios mal interpretados).
+# OJO: esta lista sale de memoria y NO está verificada: algunos foros habrán cambiado de URL o exigirán login para ver las ventas.
+# El script lo detecta y lo informa; nunca intenta saltarse login, CAPTCHA ni robots.txt.
+Uhrforum | https://www.uhrforum.de | DE | EUR
+Horloge Forum | https://www.horlogeforum.nl | NL | EUR
+WatchUSeek | https://www.watchuseek.com | US | USD
+Omega Forums | https://omegaforums.net | US | USD
+Rolex Forums | https://www.rolexforums.com | US | USD
+The Watch Forum (UK) | https://thewatchforum.co.uk | GB | GBP
+WatchLounge | https://www.watchlounge.com | US | USD
+Chronocentric | https://www.chronocentric.com | US | USD
