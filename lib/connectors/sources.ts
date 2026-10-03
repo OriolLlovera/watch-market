@@ -21,4 +21,15 @@ export const FORUM_SOURCES: ForumSource[] = [
     priceFromThread: findRelojesEspecialesPrice, // "Precio: 1.250€" está en el primer mensaje
     parse: parseRelojesEspeciales,
   },
+  {
+    // Discourse. El RSS de Discourse suele estar vetado en robots.txt: se lee la categoría pública en HTML (2 páginas ≈ 60 hilos).
+    // El precio va en el primer mensaje ("Precio: 90€"), que el conector lee de cada hilo nuevo (se cachea 48 h).
+    name: "Hablemos de Relojes", country: "ES", defaultCurrency: "EUR", kind: "discourse",
+    feedUrls: [
+      "https://www.hablemosderelojes.com/c/mercado-de-relojes/12",
+      "https://www.hablemosderelojes.com/c/mercado-de-relojes/12?page=1",
+    ],
+    maxThreads: 30,
+    skipTitle: /\b(vendid[oa]s?|reservad[oa]s?|sold|cerrad[oa]s?)\b/i,   // el hilo fijado de normas ya cae solo (sin marca); "Busco…" lo descarta isWanted
+  },
 ];

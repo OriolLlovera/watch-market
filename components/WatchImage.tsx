@@ -6,7 +6,7 @@ import { Listing } from "@/lib/types";
 export default function WatchImage({ l, i = 0, w = 640 }: { l: Listing; i?: number; w?: number }) {
   const [bad, setBad] = useState(false);
   const src = l.images[i];
-  if (src && !bad) return <img src={/^https?:/.test(src) ? `/api/img?w=${w}&u=${encodeURIComponent(src)}` : src} alt={l.title} loading="lazy" referrerPolicy="no-referrer" onError={() => setBad(true)} className="h-full w-full object-cover" />;
+  if (src && !bad) return <img src={/^https?:/.test(src) ? `/api/img?w=${w}&v=2&u=${encodeURIComponent(src)}` : src} alt={l.title} loading="lazy" referrerPolicy="no-referrer" onError={() => setBad(true)} className="h-full w-full object-cover" />;
   const light = ["#d8d2c0","#c9c3b3","#e4e6e8","#e8e4d8","#cfcab8","#c7a63a"].includes(l.dial);
   const ink = light ? "#1B1B1A" : "#EDEDEA";
   return (

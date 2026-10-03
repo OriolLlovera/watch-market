@@ -21,19 +21,29 @@ export interface ForumSource {
   /** Sitios donde el precio NO va en el título: se extrae del primer mensaje. Requiere `parse`. */
   priceFromThread?: (firstPostText: string) => Price | null;
   parse?: (title: string, body: string, price: Price) => Parsed;
+  /** "discourse": `feedUrls` son páginas de categoría en HTML (p. ej. https://foro/c/mercado/12), no RSS: Discourse veta el RSS en su robots.txt por defecto. */
+  kind?: "rss" | "discourse";
+  /** Hilos cuyo título coincida se descartan (vendidos, reservados...). */
+  skipTitle?: RegExp;
 }
 
-interface Detail { at: number; text: string; images: string[] }
+interface Row { title: string; link: string; rssBody: string; date: string; creator: string }
+
+interface Detail { at: number; text: string; images: string[]; author?: string; postedAt?: string }
 const DETAIL_TTL = Number(process.env.THREAD_TTL_HOURS || 48) * 3600e3;
 const MAX_FAILS = 3; // fallos seguidos antes de dejar de pedir hilos en este refresco (403/429/robots)
 
 // Contenedor del primer mensaje según plataforma; se usa el primero que exista en la página.
-const POST_SEL = ["article.message--post .bbWrapper", ".postbody .content", "[id^='post_message_']", ".post .content", "[data-role='commentContent']"];
+const POST_SEL = ["article.message--post .bbWrapper", ".postbody .content", "[id^='post_message_']", ".post .content", "[data-role='commentContent']",
+  // Discourse (vista sin JavaScript): el primer mensaje es #post_1
+  "#post_1 [itemprop='text']", "#post_1 .post", "[itemprop='articleBody']", ".crawler-post .post", ".cooked"];
+// Discourse sirve el contenido dentro de <noscript>: con scripting activado, parse5 lo trata como texto y no se ve.
+const loadHtml = (h: string) => cheerio.load(h, { scriptingEnabled: false });
 const BAD_IMG = /smilies?|emoji|emoticon|avatar|\/styles\/|\/images\/(icons|misc|buttons|statusicon)|spacer|pixel|logo|\/reactions?\//i;
 const slug = (s: string) => s.toLowerCase().replace(/\W+/g, "");
 
 function extract(html: string, url: string): Detail {
-  const $ = cheerio.load(html);
+  const $ = loadHtml(html);
   const sel = POST_SEL.find((s) => $(s).length > 0);
   const root = sel ? $(sel).first() : null;
   const images: string[] = [];
@@ -53,7 +63,39 @@ function extract(html: string, url: string): Detail {
     });
   }
   if (!images.length) add($('meta[property="og:image"]').attr("content"));
-  return { at: Date.now(), text: root ? stripHtml(root.text()).slice(0, 3000) : "", images: Array.from(new Set(images)).slice(0, 8) };
+  // Texto: sin los rótulos de las fotos de Discourse ("IMG_5154 3024×4032 2.93 MB"). Si no hay contenedor, la descripción og/meta.
+  let text = "";
+  if (root) { const c = root.clone(); c.find(".lightbox-wrapper, .lightbox .meta").remove(); text = stripHtml(c.text()).slice(0, 3000); }
+  if (!text) text = stripHtml($('meta[property="og:description"]').attr("content") || $('meta[name="description"]').attr("content") || "").slice(0, 3000);
+  // Autor y fecha del hilo (Discourse no los da en la lista de categoría).
+  const isDiscourse = /discourse/i.test($('meta[name="generator"]').attr("content") || "");
+  const first: cheerio.Cheerio<any> | null = $("#post_1").length ? $("#post_1") : isDiscourse ? $.root() : null;
+  const author = first && (first.find("[itemprop='author'] [itemprop='name']").first().text() || first.find(".creator").first().text() || first.find("a[href*='/u/']").first().text()).trim();
+  const postedAt = $('meta[property="article:published_time"]').attr("content") || $("time[itemprop='datePublished']").first().attr("datetime");
+  return { at: Date.now(), text, images: Array.from(new Set(images)).slice(0, 8), ...(author ? { author } : {}), ...(postedAt ? { postedAt } : {}) };
+}
+
+function rssRows(xml: string): Row[] {
+  const $ = cheerio.load(xml, { xmlMode: true });
+  return $("item").toArray().map((el) => { const it = $(el); return {
+    title: stripHtml(it.find("title").first().text()), link: it.find("link").first().text().trim(),
+    rssBody: stripHtml(it.find("content\\:encoded, encoded, description").first().text()),
+    date: it.find("pubDate").first().text(), creator: it.find("dc\\:creator, creator").first().text().trim(),
+  }; });
+}
+
+/** Lista de hilos de una categoría de Discourse: enlaces /t/<slug>/<id> (sin el /<nº de mensaje> de "último mensaje"). */
+function discourseRows(html: string, pageUrl: string): Row[] {
+  const $ = loadHtml(html), out = new Map<string, Row>();
+  $("a[href]").each((_, a) => {
+    let u: URL; try { u = new URL($(a).attr("href")!, pageUrl); } catch { return; }
+    if (!/^\/t\/[^/]+\/\d+\/?$/.test(u.pathname)) return;
+    const title = stripHtml($(a).text());
+    if (!title || /^\d+$/.test(title)) return;
+    const link = u.origin + u.pathname.replace(/\/$/, "");
+    if (!out.has(link)) out.set(link, { title, link, rssBody: "", date: "", creator: "" });
+  });
+  return [...out.values()];
 }
 
 export const forum = (s: ForumSource): Connector => ({
@@ -78,23 +120,20 @@ export const forum = (s: ForumSource): Connector => ({
 
     for (const feedUrl of s.feedUrls) {
       const xml = await politeFetch(feedUrl);
-      if (!xml) { console.warn(`[${s.name}] sin RSS: ${feedUrl}`); continue; }
-      const $ = cheerio.load(xml, { xmlMode: true });
-      const items = $("item").toArray().slice(s.skipItems ?? 0, (s.skipItems ?? 0) + (s.maxThreads ?? 20));
+      if (!xml) { console.warn(`[${s.name}] sin ${s.kind === "discourse" ? "página de categoría" : "RSS"}: ${feedUrl}`); continue; }
+      const rows = s.kind === "discourse" ? discourseRows(xml, feedUrl) : rssRows(xml);
+      const items = rows.slice(s.skipItems ?? 0, (s.skipItems ?? 0) + (s.maxThreads ?? 20));
       let ok = 0;
 
-      for (const el of items) {
+      for (const row of items) {
         try {
-          const it = $(el);
-          const title = stripHtml(it.find("title").first().text());
-          const link = it.find("link").first().text().trim();
+          const { title, link, rssBody } = row;
           if (!title || !link || seen.has(link)) continue;
           seen.add(link);
-          const rssBody = stripHtml(it.find("content\\:encoded, encoded, description").first().text());
           const cur = s.defaultCurrency ?? "EUR";
 
           // Atajo: sin marca en el título no hay anuncio válido (salvo parser propio): ahorra la petición.
-          if (isWanted(title) || (!s.parse && !detectBrand(title))) continue;
+          if (isWanted(title) || s.skipTitle?.test(title) || (!s.parse && !detectBrand(title))) continue;
 
           const d = await detail(link);
           if (d) keep[link] = d; // también los descartados: así no se vuelven a pedir
@@ -105,10 +144,10 @@ export const forum = (s: ForumSource): Connector => ({
           } else parsed = parseListing(title, d?.text || rssBody, cur);
           if (!parsed) continue;
 
-          const date = new Date(it.find("pubDate").first().text());
+          const date = new Date(row.date || d?.postedAt || "");
           all.push({
             id: `${slug(s.name)}-${hash(link)}`, ...parsed,
-            seller: it.find("dc\\:creator, creator").first().text().trim() || "—", source: s.name, country: s.country,
+            seller: row.creator || d?.author || "—", source: s.name, country: s.country,
             postedAt: (isNaN(+date) ? new Date() : date).toISOString(), url: link, images: d?.images ?? [],
           });
           ok++;
