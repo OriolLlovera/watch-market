@@ -90,7 +90,7 @@ export const refreshNow = refresh;
 export async function refreshAll() {
   await hydrate(); // carga lo anterior: sirve de respaldo si una fuente falla
   await Promise.all(active().map(refresh));
-  return active().map((c) => ({ name: c.name, count: st(c.id).listings.length, ok: !!st(c.id).ok, saved: !!st(c.id).saved }));
+  return active().map((c) => ({ id: c.id, name: c.name, count: st(c.id).listings.length, ok: !!st(c.id).ok, saved: !!st(c.id).saved }));
 }
 
 /** Para /api/status: qué hay realmente guardado y cuándo se actualizó. */

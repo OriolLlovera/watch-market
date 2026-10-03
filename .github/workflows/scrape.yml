@@ -21,8 +21,18 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Comprobar secrets de Netlify
+        env:
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+        run: |
+          fail=0
+          [ -n "${NETLIFY_SITE_ID// }" ]   || { echo "::error::Falta el REPOSITORY SECRET NETLIFY_SITE_ID (vacío o inexistente)"; fail=1; }
+          [ -n "${NETLIFY_AUTH_TOKEN// }" ] || { echo "::error::Falta el REPOSITORY SECRET NETLIFY_AUTH_TOKEN (vacío o inexistente)"; fail=1; }
+          exit $fail
       - run: npm run scrape
         env:
+          WM_REQUIRE_BLOBS: "1"   # en CI nunca se guarda en disco: si faltan credenciales, falla
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           SCRAPER_UA: ${{ secrets.SCRAPER_UA }}

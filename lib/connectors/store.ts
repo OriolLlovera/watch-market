@@ -12,8 +12,9 @@ import type { Store } from "@netlify/blobs";
 // Si aun así no se detectara, define WM_SERVERLESS=1 en Netlify (Site configuration > Environment variables, scope Functions).
 export const SERVERLESS = !!(process.env.WM_SERVERLESS === "1" || process.env.NETLIFY || process.env.NETLIFY_BLOBS_CONTEXT
   || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT || process.env.AWS_EXECUTION_ENV);
-const CREDS = process.env.NETLIFY_SITE_ID && process.env.NETLIFY_AUTH_TOKEN
-  ? { siteID: process.env.NETLIFY_SITE_ID, token: process.env.NETLIFY_AUTH_TOKEN } : null;
+// .trim(): un secret pegado con salto de línea o espacios al final daría un 401 difícil de ver.
+const SITE_ID = process.env.NETLIFY_SITE_ID?.trim(), TOKEN = process.env.NETLIFY_AUTH_TOKEN?.trim();
+const CREDS = SITE_ID && TOKEN ? { siteID: SITE_ID, token: TOKEN } : null;
 const USE_BLOBS = SERVERLESS || !!CREDS;
 
 const DIR = SERVERLESS ? "/tmp/wm-cache" : path.resolve(process.cwd(), process.env.CACHE_DIR || ".cache");
@@ -53,6 +54,7 @@ export function shared<T>(name: string, init: () => T): T {
 /** Diagnóstico para /api/status (solo booleanos: nunca expone valores de variables). */
 export const storageInfo = () => ({
   mode: USE_BLOBS ? "blobs" : "disk", serverless: SERVERLESS, credentialsSet: !!CREDS,
+  credentials: { NETLIFY_SITE_ID: !!SITE_ID, NETLIFY_AUTH_TOKEN: !!TOKEN },
   env: { NETLIFY: !!process.env.NETLIFY, NETLIFY_BLOBS_CONTEXT: !!process.env.NETLIFY_BLOBS_CONTEXT, AWS_LAMBDA_FUNCTION_NAME: !!process.env.AWS_LAMBDA_FUNCTION_NAME, LAMBDA_TASK_ROOT: !!process.env.LAMBDA_TASK_ROOT, WM_SERVERLESS: !!process.env.WM_SERVERLESS },
 });
 export async function probe(key: string): Promise<{ found: boolean; error?: string }> {
