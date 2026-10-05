@@ -1,6 +1,7 @@
-import { Filters, Listing, SortKey } from "./types";
+import { Currency, Filters, Listing, SortKey } from "./types";
 export const SIZES = [["<36", 0, 36], ["36–38", 36, 38], ["38–40", 38, 40], ["40–42", 40, 42], ["42–44", 42, 44], ["44+", 44, 999]] as const;
-const FX = { USD: 1, EUR: 1.08, GBP: 1.27 };
+// Cambio aproximado a USD (solo para ordenar/filtrar y mostrar "≈"). Estáticos: ajústalos aquí si se desvían.
+const FX: Record<Currency, number> = { USD: 1, EUR: 1.08, GBP: 1.27, CHF: 1.15, NOK: 0.095, SEK: 0.098, DKK: 0.145, AUD: 0.65, CAD: 0.73 };
 export const toUsd = (l: Listing) => l.price * FX[l.currency];
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 export function score(l: Listing, q: string) {
@@ -30,7 +31,10 @@ export function applyFilters(all: Listing[], f: Filters, sort: SortKey) {
       (!f.styles.length || f.styles.includes(l.style)) &&
       (!f.sources.length || f.sources.includes(l.source)) &&
       (!f.countries.length || f.countries.includes(l.country)) &&
-      (!f.conditions.length || f.conditions.includes(l.condition)));
+      (!f.conditions.length || f.conditions.includes(l.condition)) &&
+      (!f.movements.length || (!!l.movement && f.movements.includes(l.movement))) &&
+      (!f.materials.length || (!!l.material && f.materials.includes(l.material))) &&
+      (!f.contents.length || (!!l.contents && f.contents.includes(l.contents))));
   rows.sort((a, b) =>
     sort === "priceAsc" ? toUsd(a.l) - toUsd(b.l) :
     sort === "priceDesc" ? toUsd(b.l) - toUsd(a.l) :
@@ -38,7 +42,9 @@ export function applyFilters(all: Listing[], f: Filters, sort: SortKey) {
     +new Date(b.l.postedAt) - +new Date(a.l.postedAt));
   return rows.map((r) => r.l);
 }
-export const money = (l: Listing) => new Intl.NumberFormat("es-ES", { style: "currency", currency: l.currency, maximumFractionDigits: 0 }).format(l.price);
+// Cada divisa en su formato natural: $1,150 · £960 · 1.150 €  (con "es-ES" salían "960 GBP" y "220 US$").
+const LOCALE: Record<Currency, string> = { USD: "en-US", GBP: "en-GB", EUR: "es-ES", CHF: "de-CH", NOK: "nb-NO", SEK: "sv-SE", DKK: "da-DK", AUD: "en-AU", CAD: "en-CA" };
+export const money = (l: Listing) => new Intl.NumberFormat(LOCALE[l.currency], { style: "currency", currency: l.currency, maximumFractionDigits: 0 }).format(l.price);
 export function ago(iso: string) {
   const m = Math.max(1, Math.round((Date.now() - +new Date(iso)) / 60000));
   if (m < 60) return `hace ${m} min`;

@@ -2,7 +2,8 @@ import * as cheerio from "cheerio";
 import { Listing } from "../types";
 import { Connector } from "./types";
 import { politeFetch } from "./http";
-import { readJson, writeJson } from "./store";
+import { diagnostics, readJson, writeJson } from "./store";
+import { extractSpecs } from "./specs";
 import { Currency, detectBrand, hash, isWanted, parseListing, stripHtml } from "./parse";
 
 type Price = { price: number; currency: Currency };
@@ -21,13 +22,14 @@ export interface ForumSource {
   /** Sitios donde el precio NO va en el título: se extrae del primer mensaje. Requiere `parse`. */
   priceFromThread?: (firstPostText: string) => Price | null;
   parse?: (title: string, body: string, price: Price) => Parsed;
+  /** "xenforo-market": páginas de lista de una sección XenForo cuyas filas traen precio/estado/país ("Location: US FS  $4999USD"), no RSS. */
   /** "discourse": `feedUrls` son páginas de categoría en HTML (p. ej. https://foro/c/mercado/12), no RSS: Discourse veta el RSS en su robots.txt por defecto. */
-  kind?: "rss" | "discourse";
+  kind?: "rss" | "discourse" | "xenforo-market";
   /** Hilos cuyo título coincida se descartan (vendidos, reservados...). */
   skipTitle?: RegExp;
 }
 
-interface Row { title: string; link: string; rssBody: string; date: string; creator: string }
+interface Row { title: string; link: string; rssBody: string; date: string; creator: string; price?: Price; status?: string; country?: string; badCurrency?: string }
 
 interface Detail { at: number; text: string; images: string[]; author?: string; postedAt?: string }
 const DETAIL_TTL = Number(process.env.THREAD_TTL_HOURS || 48) * 3600e3;
@@ -84,6 +86,39 @@ function rssRows(xml: string): Row[] {
   }; });
 }
 
+/** Lista de una sección-mercadillo de XenForo. Cada fila trae "Location: US FS" + precio ("$4999USD", "€10400", "360CHF").
+ *  Independiente de clases CSS: la fila es el ancestro más grande que contiene un solo enlace de hilo. */
+const SUPPORTED: Record<string, Currency> = { USD: "USD", EUR: "EUR", GBP: "GBP", CHF: "CHF", AUD: "AUD", CAD: "CAD", NOK: "NOK", SEK: "SEK", DKK: "DKK" };
+// Etiquetas de estado de hilo (XenForo): vendido/retirado/reservado y "se busca". Sin \b: "Ø" no es carácter de palabra en JS.
+const DEAD = /(?:^|\s)(?:SOLD|WITHDRAWN|EXPIRED|CANCELL?ED|PENDING|Solgt|Reservert|Verkauft|Vendido)(?=\s|$)/i;
+const WANTED = /(?:^|\s)(?:Ønskes kjøpt|Ønskes|Kjøpes|Gesucht|WTB|Busco)(?=\s|$)/i;
+function xenforoMarketRows(html: string, pageUrl: string): Row[] {
+  const $ = loadHtml(html), out = new Map<string, Row>();
+  const canon = (href: string | undefined) => { try { const u = new URL(href ?? "", pageUrl); return /\/threads\/[^/]+\.\d+\/?$/.test(u.pathname) ? u.origin + u.pathname : null; } catch { return null; } };
+  const links = (el: cheerio.Cheerio<any>) => new Set(el.find("a[href*='/threads/']").toArray().map((x) => canon($(x).attr("href"))).filter(Boolean));
+  $("a[href*='/threads/']").each((_, a) => {
+    const link = canon($(a).attr("href")), title = stripHtml($(a).text());
+    if (!link || !title || out.has(link) || !$(a).closest("h1,h2,h3,h4,.structItem-title").length) return;
+    let row = $(a).parent();
+    while (row.parent().length && links(row.parent()).size === 1) row = row.parent();
+    const text = row.text().replace(/\s+/g, " ");
+    const r: Row = { title, link, rssBody: "", date: row.find("time[datetime]").first().attr("datetime") ?? "", creator: "" };
+    r.creator = row.find("a[href*='/members/']").toArray().map((x) => $(x).text().trim()).find(Boolean) ?? "";
+    const m = text.match(/Location:\s*([A-Z]{2})\s+((?:[A-Z]{2,12}\s+)*?)([$€£])?\s?(\d[\d,.]*)\s?(USD|EUR|GBP|AUD|CAD|CHF|NZD)?/);
+    if (m) {
+      r.country = m[1]; r.status = m[2].trim();
+      const cur = m[5] ?? ({ "€": "EUR", "£": "GBP", "$": "USD" } as Record<string, string>)[m[3] ?? ""];
+      let n = m[4].replace(/,/g, ""); if (/^\d{1,3}(\.\d{3})+$/.test(n)) n = n.replace(/\./g, "");
+      if (cur && SUPPORTED[cur] && +n > 0) r.price = { price: +n, currency: SUPPORTED[cur] }; else if (cur && !SUPPORTED[cur]) r.badCurrency = cur;
+    }
+    // Etiqueta de prefijo del hilo ("Selges", "Solgt", "Ønskes kjøpt"...): enlaces ?prefix_id=N de la fila.
+    const prefix = row.find("a[href*='prefix_id=']").toArray().map((x) => $(x).text().trim()).filter(Boolean).join(" ");
+    r.status = [prefix, r.status].filter(Boolean).join(" ").trim() || undefined;
+    out.set(link, r);
+  });
+  return [...out.values()];
+}
+
 /** Lista de hilos de una categoría de Discourse: enlaces /t/<slug>/<id> (sin el /<nº de mensaje> de "último mensaje"). */
 function discourseRows(html: string, pageUrl: string): Row[] {
   const $ = loadHtml(html), out = new Map<string, Row>();
@@ -107,6 +142,8 @@ export const forum = (s: ForumSource): Connector => ({
     const keep: Record<string, Detail> = {};
     const all: Listing[] = [], seen = new Set<string>();
     let fails = 0, fetched = 0;
+    const diag = { pages: [] as { url: string; ok: boolean; bytes?: number; rows?: number }[],
+      skipped: { wanted: 0, titleFilter: 0, sold: 0, currency: 0, noBrand: 0, noDetail: 0, noParse: 0 }, accepted: 0 };
 
     const detail = async (url: string): Promise<Detail | null> => {
       const hit = cache[url];
@@ -120,8 +157,9 @@ export const forum = (s: ForumSource): Connector => ({
 
     for (const feedUrl of s.feedUrls) {
       const xml = await politeFetch(feedUrl);
-      if (!xml) { console.warn(`[${s.name}] sin ${s.kind === "discourse" ? "página de categoría" : "RSS"}: ${feedUrl}`); continue; }
-      const rows = s.kind === "discourse" ? discourseRows(xml, feedUrl) : rssRows(xml);
+      if (!xml) { diag.pages.push({ url: feedUrl, ok: false }); console.warn(`[${s.name}] sin ${s.kind === "discourse" ? "página de categoría" : "RSS"}: ${feedUrl}`); continue; }
+      const rows = s.kind === "discourse" ? discourseRows(xml, feedUrl) : s.kind === "xenforo-market" ? xenforoMarketRows(xml, feedUrl) : rssRows(xml);
+      diag.pages.push({ url: feedUrl, ok: true, bytes: xml.length, rows: rows.length });
       const items = rows.slice(s.skipItems ?? 0, (s.skipItems ?? 0) + (s.maxThreads ?? 20));
       let ok = 0;
 
@@ -133,24 +171,31 @@ export const forum = (s: ForumSource): Connector => ({
           const cur = s.defaultCurrency ?? "EUR";
 
           // Atajo: sin marca en el título no hay anuncio válido (salvo parser propio): ahorra la petición.
-          if (isWanted(title) || s.skipTitle?.test(title) || (!s.parse && !detectBrand(title))) continue;
+          if (isWanted(title)) { diag.skipped.wanted++; continue; }
+          if (s.skipTitle?.test(title)) { diag.skipped.titleFilter++; continue; }
+          if (!s.parse && !detectBrand(title)) { diag.skipped.noBrand++; continue; }
+          if (row.status && WANTED.test(row.status)) { diag.skipped.wanted++; continue; }
+          if (row.status && DEAD.test(row.status)) { diag.skipped.sold++; continue; }
+          if (row.badCurrency) { diag.skipped.currency++; continue; }
 
           const d = await detail(link);
           if (d) keep[link] = d; // también los descartados: así no se vuelven a pedir
+          if (!d) diag.skipped.noDetail++;
           let parsed: Parsed | null = null;
           if (s.parse && s.priceFromThread) {
             const price = d && s.priceFromThread(d.text);
             if (price) parsed = s.parse(title, rssBody, price);
-          } else parsed = parseListing(title, d?.text || rssBody, cur);
-          if (!parsed) continue;
+          } else parsed = parseListing(title, d?.text || rssBody, cur, row.price);
+          if (!parsed) { diag.skipped.noParse++; continue; }
+          parsed = { ...parsed, ...extractSpecs(title, d?.text || rssBody) }; // también para parsers propios (p. ej. Relojes Especiales)
 
           const date = new Date(row.date || d?.postedAt || "");
           all.push({
             id: `${slug(s.name)}-${hash(link)}`, ...parsed,
-            seller: row.creator || d?.author || "—", source: s.name, country: s.country,
+            seller: row.creator || d?.author || "—", source: s.name, country: row.country || s.country,
             postedAt: (isNaN(+date) ? new Date() : date).toISOString(), url: link, images: d?.images ?? [],
           });
-          ok++;
+          ok++; diag.accepted++;
           if (ok % 5 === 0) onProgress?.([...all]);
         } catch (e) { console.warn(`[${s.name}] error en un anuncio:`, (e as Error).message); }
       }
@@ -159,6 +204,7 @@ export const forum = (s: ForumSource): Connector => ({
     }
     // Solo se conservan los hilos que siguen en los feeds: la caché no crece sin límite.
     if (all.length) await writeJson(key, keep); // si todo falló (red, 403...) no se borra la memoria de hilos anterior
+    diagnostics[slug(s.name)] = diag;
     console.log(`[${s.name}] ${all.length} anuncios (${fetched} hilos nuevos descargados)`);
     return all;
   },

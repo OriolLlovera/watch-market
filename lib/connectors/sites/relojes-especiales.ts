@@ -256,7 +256,10 @@ function findREBrand(title: string): string {
   return found ?? "—";
 }
 
-function findREReference(title: string): string {
+function findREReference(title: string, brand = ""): string {
+  // El primer token en mayúsculas suele ser la propia marca ("PANERAI", "CITIZEN"): no es una referencia.
+  const brandWords = new Set(brand.toUpperCase().split(/[\s-]+/).filter(Boolean));
+  const isBrand = (v: string) => brandWords.has(v.toUpperCase()) || v.toUpperCase() === brand.toUpperCase();
   const matches =
     title.match(
       /\b[A-Z]{1,5}[-]?[A-Z0-9]{2,12}(?:[-][A-Z0-9]{1,8})?\b/g
@@ -280,6 +283,7 @@ function findREReference(title: string): string {
     (value) =>
       value.length >= 4 &&
       !ignored.has(value.toUpperCase()) &&
+      !isBrand(value) &&
       !/^19\d{2}$/.test(value) &&
       !/^20\d{2}$/.test(value)
   );
@@ -312,7 +316,11 @@ export function parseRelojesEspeciales(
     .trim();
 
   const brand = findREBrand(clean);
-  const reference = findREReference(clean);
+  let reference = findREReference(clean, brand);
+  if (reference === "—") { // el texto suele traerla: "REFERENCIA: PAM00312"
+    const m = body.match(/REFERENCIA\s*[:\-]?\s*([A-Z0-9][A-Z0-9.\-/]{2,14})/i);
+    if (m && !/^(19|20)\d{2}$/.test(m[1]) && m[1].toUpperCase() !== brand.toUpperCase()) reference = m[1].toUpperCase();
+  }
 
   const year =
     clean.match(

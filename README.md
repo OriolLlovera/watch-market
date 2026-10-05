@@ -31,3 +31,22 @@ La web solo **lee** de Netlify Blobs; el scraping lo hace `npm run scrape` (GitH
 3. Commit + push: el siguiente `scrape` en GitHub Actions ya las incluye. Ajusta `maxThreads` si tarda demasiado.
 Límites: solo foros con RSS público y robots.txt que lo permita (no se salta login, CAPTCHA ni bloqueos);
 solo divisas EUR/USD/GBP (SEK, CHF, etc. no están soportadas); muchos foros exigen N mensajes para *vender*, pero leer suele ser público.
+ HEAD
+
+
+### Foros Discourse (p. ej. Hablemos de Relojes)
+Discourse veta su RSS en robots.txt por defecto, así que se lee la categoría pública en HTML: en `sources.ts`, `kind: "discourse"`
+y `feedUrls` = páginas de categoría (`https://foro/c/mercado/12`, `...?page=1`). El precio se saca del primer mensaje del hilo.
+`skipTitle` descarta hilos "Vendido/Reservado". Prueba local: `SCRAPER_UA="Bot (+tu@email.com)" npm run scrape:test`.
+
+## Interfaz
+Tailwind + lucide-react (sin dependencias nuevas). Tema claro/oscuro con variables CSS (`app/globals.css`, `--c-*`) y alternador en la cabecera;
+tecla `/` enfoca el buscador; filtros colapsables con contadores y chips de filtros activos; panel de filtros lateral en móvil; galería con flechas del teclado.
+Fuentes con precio en la lista (`kind: "xenforo-market"`, p. ej. Omega Forums): descarta SOLD/WITHDRAWN y divisas no soportadas (CHF, AUD, CAD…).
+
+## Datos de la ficha y divisas
+`lib/connectors/specs.ts` deduce del texto (ES/EN/DE/NO) movimiento, material de la caja, año, esfera, resistencia al agua, contenido (full set / solo reloj),
+envío incluido y negociable. Solo se rellena lo que el anuncio dice claro; el año exige contexto ("año: 1995", "Baujahr 1972", "(2016)") porque en los títulos suele ser el nombre del modelo.
+Divisas soportadas: USD, EUR, GBP, CHF, NOK, SEK, DKK, AUD, CAD (cambio aproximado y estático en `lib/search.ts`, `FX`).
+Tidssonen (`kind: "xenforo-market"`): el estado sale de la etiqueta del hilo (Selges / Solgt / Ønskes kjøpt) y el precio del primer mensaje (`9500,-`, `kr 12 500`).
+ e271ca1 (Add Tidssonen connector and latest updates)

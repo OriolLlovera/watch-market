@@ -1,27 +1,47 @@
 import type { Condition, Listing, Style } from "../types";
+import { extractSpecs } from "./specs";
 
 export type Currency = Listing["currency"];
-export type Parsed = Pick<Listing, "title" | "description" | "brand" | "model" | "reference" | "price" | "currency" | "condition" | "caseSize" | "style" | "dial">;
+export type Parsed = Pick<Listing, "title" | "description" | "brand" | "model" | "reference" | "price" | "currency" | "condition" | "caseSize" | "style" | "dial"
+  | "movement" | "material" | "year" | "contents" | "waterResistance" | "freeShipping" | "negotiable" | "dialName">;
 
 // Orden importa: los nombres largos primero ("Grand Seiko" antes que "Seiko").
 const BRANDS = ["Grand Seiko", "Jaeger-LeCoultre", "Jaeger LeCoultre", "TAG Heuer", "Audemars Piguet", "Patek Philippe", "Vacheron Constantin", "Universal Geneve", "Christopher Ward", "Raymond Weil",
   "Rolex", "Omega", "Tudor", "Seiko", "Citizen", "Breitling", "IWC", "Cartier", "Heuer", "Casio", "Hamilton", "Panerai", "Longines", "Zenith", "Nomos", "Sinn", "Oris", "Tissot", "Bulova", "Orient",
   "Hublot", "Blancpain", "Baltic", "Squale", "Doxa", "Timex", "Marathon", "Glycine", "Certina", "Rado", "Montblanc", "Junghans", "Laco", "Stowa", "Farer", "Zodiac", "Vostok", "Enicar", "Eterna"];
 const ALIAS: Record<string, string> = { "jaeger lecoultre": "Jaeger-LeCoultre", jlc: "Jaeger-LeCoultre", "tag heuer": "Heuer" };
-const SYMBOL: Record<string, Currency> = { $: "USD", "us$": "USD", usd: "USD", "€": "EUR", eur: "EUR", "£": "GBP", gbp: "GBP" };
+const CODES = "usd|eur|gbp|chf|nok|sek|dkk|aud|cad";
+const SYMBOL: Record<string, Currency> = { $: "USD", "us$": "USD", "€": "EUR", "£": "GBP", usd: "USD", eur: "EUR", gbp: "GBP", chf: "CHF", nok: "NOK", sek: "SEK", dkk: "DKK", aud: "AUD", cad: "CAD" };
+const NORDIC: Currency[] = ["NOK", "SEK", "DKK"];
+const PRICE_RE = new RegExp(`(us\\$|\\$|€|£|\\b(?:${CODES})\\b)\\s?(\\d[\\d.,]*)\\s?(k\\b)?|(?<![\\w.,])(\\d[\\d.,]*)\\s?(k\\b)?\\s?(${CODES}|€|£|\\$)(?![a-z\\d])`, "i");
+const SUFFIX_RE = new RegExp(`^\\s?(${CODES})(?![a-z])`, "i");
+// Quita precios del título para quedarnos con modelo + referencia.
+const PRICE_STRIP = new RegExp(`(us\\$|\\$|€|£)\\s?\\d[\\d.,]*k?|(?<![\\w.,])\\d[\\d.,]*k?\\s?(${CODES}|€|£|\\$)(?![a-z\\d])`, "gi");
 
 export const hash = (s: string) => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0).toString(36); };
 export const stripHtml = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&quot;/g, "'").replace(/\s+/g, " ").trim();
 
 const num = (s: string) => parseFloat(/^\d{1,3}([.,]\d{3})+$/.test(s) ? s.replace(/[.,]/g, "") : s.replace(",", "."));
 
-export function findPrice(text: string, fallback: Currency): { price: number; currency: Currency } | null {
-  const m = text.match(/(us\$|\$|€|£)\s?(\d[\d.,]*)\s?(k\b)?|(\d[\d.,]*)\s?(k\b)?\s?(usd|eur|gbp|€|£|\$)/i);
+/** Precios nórdicos: "9500,-", "9 500 kr", "kr 12.500", ":-" (sueco). Sin código de divisa se usa la de la fuente si es nórdica. */
+function findNordic(text: string, fallback: Currency): { price: number; currency: Currency } | null {
+  const m = text.match(/\b(kr|nok|sek|dkk)\.?\s?(\d[\d .\u00a0]*\d|\d)|(\d[\d .\u00a0]*\d|\d)\s?(?:,-|\.-|:-|\b(kr|nok|sek|dkk|kroner)\b)/i);
   if (!m) return null;
+  const code = (m[1] ?? m[4] ?? "").toLowerCase(), cur = SYMBOL[code] ?? (NORDIC.includes(fallback) ? fallback : undefined);
+  const price = num((m[2] ?? m[3]).replace(/[ \u00a0]/g, ""));
+  if (!cur || !isFinite(price) || price < 20 || price > 5_000_000) return null;
+  return { price: Math.round(price), currency: cur };
+}
+
+export function findPrice(text: string, fallback: Currency): { price: number; currency: Currency } | null {
+  const m = text.match(PRICE_RE);
+  if (!m) return findNordic(text, fallback);
   const sym = (m[1] ?? m[6]).toLowerCase(), raw = m[2] ?? m[4], k = m[3] ?? m[5];
   let price = num(raw) * (k ? 1000 : 1);
   if (!isFinite(price) || price < 20 || price > 2_000_000) return null;
-  return { price: Math.round(price), currency: SYMBOL[sym] ?? fallback };
+  // "$3750AUD", "$4999USD": un código pegado detrás del importe manda sobre el símbolo.
+  const suffix = text.slice((m.index ?? 0) + m[0].length).match(SUFFIX_RE)?.[1].toLowerCase();
+  return { price: Math.round(price), currency: SYMBOL[suffix ?? sym] ?? fallback };
 }
 
 const STYLES: [Style, RegExp][] = [
@@ -46,7 +66,8 @@ function condition(t: string, year?: number): Condition {
  * Devuelve null si no parece una venta con marca y precio (WTB, intercambios, ruido...).
  */
 /** Marca reconocida en un texto (o undefined). Sirve para descartar hilos antes de pedir su página. */
-export function detectBrand(text: string): string | undefined {
+export function detectBrand(raw: string): string | undefined {
+  const text = raw.replace(/Ω/g, "Omega "); // "Ω 14744, onyx..." (Omega Forums)
   const lower = text.toLowerCase();
   const b = BRANDS.find((x) => new RegExp(`(^|[^a-z])${x.replace(/[-]/g, "[- ]?")}([^a-z]|$)`, "i").test(text));
   const alias = Object.keys(ALIAS).find((a) => new RegExp(`(^|[^a-z])${a}([^a-z]|$)`).test(lower));
@@ -70,7 +91,7 @@ export function parseListing(title: string, body = "", fallbackCurrency: Currenc
   const caseSize = sizeM && +sizeM[1] >= 20 && +sizeM[1] <= 60 ? +sizeM[1] : 0;
 
   // Quita etiquetas [WTS], el precio y la marca para quedarnos con modelo + referencia.
-  const rest = clean.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/(us\$|\$|€|£)\s?\d[\d.,]*k?|\d[\d.,]*k?\s?(usd|eur|gbp|€|£|\$)/gi, " ")
+  const rest = clean.replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(PRICE_STRIP, " ")
     .replace(new RegExp(brand.replace(/[-]/g, "[- ]?"), "i"), " ").replace(/\b\d{2}(\.\d)?\s?mm\b/gi, " ");
   const ref = (rest.match(/\b(?=[A-Za-z0-9.\-]*\d)[A-Za-z]{0,4}\d[A-Za-z0-9.\-]{2,11}\b/g) ?? []).find((t) => !/^(19|20)\d{2}$/.test(t) && t.length >= 4) ?? "";
   const NOISE = /\b(full (kit|set)|box (and|&) papers|b&p|like new|mint|serviced|unpolished|unworn|bnib|hand wound|\d{4})\b/gi;
@@ -82,6 +103,7 @@ export function parseListing(title: string, body = "", fallbackCurrency: Currenc
     title: clean, description: body.slice(0, 600) || clean, brand, model, reference: ref || "—", price: pr.price, currency: pr.currency,
     condition: condition(ctx, year ? +year : undefined), caseSize, style: STYLES.find(([, re]) => re.test(clean))?.[0] ?? "Sport",
     dial: DIALS.find(([re]) => re.test(clean))?.[1] ?? "#1c1c1c",
+    ...extractSpecs(clean, body),
   };
 }
 

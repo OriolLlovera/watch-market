@@ -1,4 +1,6 @@
 @tailwind base; @tailwind components; @tailwind utilities;
+:root { --c-paper: 255 255 255; --c-wash: 245 245 242; --c-line: 226 226 221; --c-ink: 27 27 26; --c-mute: 107 107 101; --c-accent: 43 74 111; color-scheme: light; }
+.dark { --c-paper: 17 17 16; --c-wash: 28 28 26; --c-line: 52 52 48; --c-ink: 236 236 232; --c-mute: 156 156 149; --c-accent: 130 170 216; color-scheme: dark; }
 body { @apply bg-paper text-ink font-sans antialiased; }
-:focus-visible { outline: 2px solid #2B4A6F; outline-offset: 2px; }
+:focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; }
 .num { font-variant-numeric: tabular-nums; }

@@ -3,7 +3,11 @@ name: scrape
 # Scrapea las fuentes y guarda los anuncios en Netlify Blobs. La web (Netlify) solo lee de ahí.
 on:
   schedule:
+ HEAD
     - cron: "*/30 * * * *"   # cada 30 min (GitHub puede retrasarlo unos minutos)
+
+    - cron: "7,37 * * * *"   # cada 30 min, fuera de :00/:30 (los más congestionados: GitHub retrasa o descarta runs ahí)
+ e271ca1 (Add Tidssonen connector and latest updates)
   workflow_dispatch:          # botón "Run workflow" para lanzarlo a mano
 
 concurrency:

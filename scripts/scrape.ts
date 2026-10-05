@@ -3,7 +3,7 @@
 // Con NETLIFY_SITE_ID + NETLIFY_AUTH_TOKEN escribe en los Blobs de tu sitio (así lo usa GitHub Actions);
 // sin ellas escribe en .cache/ como en desarrollo. En CI (GitHub Actions) NUNCA se permite caer a disco en silencio.
 import { refreshAll } from "../lib/connectors/registry";
-import { probe, storageInfo } from "../lib/connectors/store";
+import { probe, storageInfo, writeJson } from "../lib/connectors/store";
 
 const die = (msg: string): never => { console.error(`\nERROR: ${msg}`); process.exit(1); };
 const len = (v?: string) => (v?.trim() ? `definida (${v.trim().length} caracteres)` : "VACÍA o no definida");
@@ -27,7 +27,14 @@ const len = (v?: string) => (v?.trim() ? `definida (${v.trim().length} caractere
 
   // Lectura de vuelta: confirma que lo escrito está de verdad en el almacén (en Blobs, vía API de Netlify).
   const back = await Promise.all(res.map(async (r) => ({ ...r, enAlmacen: (await probe(`listings_${r.id}`)).found })));
-  console.table(back.map(({ id, ...r }) => r));
+  console.table(back.map(({ id, diag, error, ...r }) => r));
+  for (const r of back) if (r.error || r.diag) console.log(`[diag] ${r.name}: ${JSON.stringify({ error: r.error, ...(r.diag as object) })}`);
+
+  // Resumen del run en el almacén: /api/status lo muestra, así se ve qué commit corrió y por qué falló cada fuente sin abrir logs.
+  await writeJson("meta_lastrun", {
+    finishedAt: new Date().toISOString(), commit: env.GITHUB_SHA?.slice(0, 7) ?? null, runNumber: env.GITHUB_RUN_NUMBER ? Number(env.GITHUB_RUN_NUMBER) : null,
+    sources: back.map(({ id, ...r }) => r),
+  });
 
   const notSaved = back.filter((r) => !r.saved), missing = back.filter((r) => r.saved && !r.enAlmacen), failed = back.filter((r) => !r.ok);
   if (failed.length) console.warn(`Sin resultados nuevos (se conserva lo anterior): ${failed.map((r) => r.name).join(", ")}`);

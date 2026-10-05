@@ -31,5 +31,24 @@ export const FORUM_SOURCES: ForumSource[] = [
     ],
     maxThreads: 30,
     skipTitle: /\b(vendid[oa]s?|reservad[oa]s?|sold|cerrad[oa]s?)\b/i,   // el hilo fijado de normas ya cae solo (sin marca); "Busco…" lo descarta isWanted
+  },  {
+    // XenForo con add-on de mercadillo: cada fila de la lista trae país, estado (FS/SOLD...) y precio. Publicar exige 200 mensajes; leer es público.
+    // Se descartan SOLD/WITHDRAWN. Precios en CHF/AUD/CAD se convierten de forma aproximada (lib/search.ts).
+    name: "Omega Forums", country: "US", defaultCurrency: "USD", kind: "xenforo-market",
+    feedUrls: [
+      "https://omegaforums.net/forums/private-watch-sales/",
+      "https://omegaforums.net/forums/private-watch-sales/page-2",
+    ],
+    maxThreads: 30,
+  },
+  {
+    // XenForo noruego. Estado en la etiqueta del hilo (Selges / Selges/byttes = en venta; Solgt, Ønskes kjøpt = descartados).
+    // Sin precio en la lista: se lee del primer mensaje ("Pris: 9500,-", "kr 12 500") y se asume NOK. Publicar exige registro; leer es público.
+    name: "Tidssonen", country: "NO", defaultCurrency: "NOK", kind: "xenforo-market",
+    feedUrls: [
+      "https://www.tidssonen.no/forum/forums/marked-%E2%80%93-klokker.9/",
+      "https://www.tidssonen.no/forum/forums/marked-%E2%80%93-klokker.9/page-2",
+    ],
+    maxThreads: 30,
   },
 ];

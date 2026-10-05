@@ -5,7 +5,7 @@ import { reddit } from "./reddit";
 import { ebay } from "./ebay";
 import { forum } from "./forum";
 import { FORUM_SOURCES } from "./sources";
-import { SERVERLESS, probe, readJson, shared, storageInfo, writeJson } from "./store";
+import { SERVERLESS, diagnostics, probe, readJson, shared, storageInfo, writeJson } from "./store";
 
 const planned = (name: string, country: string): Connector => ({
   id: name.toLowerCase().replace(/\W+/g, "-"), name, country, access: "pendiente", status: "planned",
@@ -29,7 +29,7 @@ const TTL = Number(process.env.LISTINGS_TTL_MIN || 15) * 60e3;
  * Estado por fuente, en globalThis (sobrevive al recompilado de Next) y persistido en .cache/.
  * La página NUNCA espera al scraping: sirve lo último guardado y cada fuente se refresca en segundo plano.
  */
-interface State { listings: Listing[]; at: number; running: boolean; ok?: boolean; saved?: boolean }
+interface State { listings: Listing[]; at: number; running: boolean; ok?: boolean; saved?: boolean; error?: string; diag?: unknown }
 const states = shared("states", () => new Map<string, State>());
 const boot = shared("boot", () => ({ p: null as Promise<void> | null, at: 0 }));
 /** En serverless la web solo LEE lo que guarda el job de scraping: se relee cada minuto en cada instancia. */
@@ -57,6 +57,7 @@ async function refresh(c: Connector) {
   if (s.running) return;
   s.running = true;
   const old = s.listings, t0 = Date.now();
+  s.error = undefined; s.diag = undefined; delete diagnostics[c.id];
   try {
     const res = await c.fetchListings((partial) => {           // resultados parciales: se ven ya
       const urls = new Set(partial.map((l) => l.url));
@@ -65,23 +66,25 @@ async function refresh(c: Connector) {
     if (res.length || !old.length) s.listings = res;           // si falla (0 resultados) se conserva lo anterior
     else { s.listings = old; console.warn(`[${c.name}] 0 resultados: se conserva la caché anterior`); }
     s.ok = res.length > 0;
+    s.diag = diagnostics[c.id]; if (!res.length) s.error = "0 resultados (mira diag: ¿página no accesible, robots/403, o el marcado no coincide?)";
     s.at = res.length ? Date.now() : Date.now() - TTL + 2 * 60e3; // 0 resultados: reintento en ~2 min
     rebuildImages();
     s.saved = await writeJson(`listings_${c.id}`, { at: s.at, listings: s.listings });
     console.log(`[${c.name}] listo en ${((Date.now() - t0) / 1000).toFixed(1)} s: ${s.listings.length} anuncios`);
-  } catch (e) { console.warn(`[${c.name}] falló:`, (e as Error).message); s.listings = old; s.ok = false; s.saved = false; s.at = Date.now() - TTL / 2; }
+  } catch (e) { console.warn(`[${c.name}] falló:`, (e as Error).message); s.listings = old; s.ok = false; s.saved = false; s.error = (e as Error).message.slice(0, 300); s.diag = diagnostics[c.id]; s.at = Date.now() - TTL / 2; }
   finally { s.running = false; }
 }
 
 /** Lo que pinta la página: respuesta inmediata + refresco en segundo plano de lo que esté caducado. */
-export async function getSnapshot(): Promise<{ listings: Listing[]; refreshing: boolean }> {
+export async function getSnapshot(): Promise<{ listings: Listing[]; refreshing: boolean; updatedAt: number }> {
   await hydrate();
   const act = active();
   // En serverless NO se scrapea desde la web (la función se congela al responder): lo hace `npm run scrape`.
   if (!SERVERLESS) for (const c of act) if (!st(c.id).running && Date.now() - st(c.id).at > TTL) void refresh(c);
   const seen = new Set<string>();
   const rows = (act.length && process.env.USE_MOCK !== "1" ? [] : MOCK_LISTINGS).concat(act.flatMap((c) => st(c.id).listings));
-  return { listings: rows.filter((l) => !seen.has(l.url) && seen.add(l.url)), refreshing: !SERVERLESS && act.some((c) => st(c.id).running) };
+  return { listings: rows.filter((l) => !seen.has(l.url) && seen.add(l.url)), refreshing: !SERVERLESS && act.some((c) => st(c.id).running),
+    updatedAt: Math.max(0, ...act.filter((c) => st(c.id).listings.length).map((c) => st(c.id).at)) };
 }
 export async function isKnownImage(url: string) { await hydrate(); return imgs.set.has(url); }
 /** Para scripts/tests: lanza una fuente y espera. */
@@ -90,7 +93,7 @@ export const refreshNow = refresh;
 export async function refreshAll() {
   await hydrate(); // carga lo anterior: sirve de respaldo si una fuente falla
   await Promise.all(active().map(refresh));
-  return active().map((c) => ({ id: c.id, name: c.name, count: st(c.id).listings.length, ok: !!st(c.id).ok, saved: !!st(c.id).saved }));
+  return active().map((c) => ({ id: c.id, name: c.name, count: st(c.id).listings.length, ok: !!st(c.id).ok, saved: !!st(c.id).saved, error: st(c.id).error, diag: st(c.id).diag }));
 }
 
 /** Para /api/status: qué hay realmente guardado y cuándo se actualizó. */
@@ -98,7 +101,9 @@ export async function status() {
   await hydrate();
   const sources = await Promise.all(active().map(async (c) => {
     const s = st(c.id), p = await probe(`listings_${c.id}`);
-    return { source: c.name, stored: p.found, count: s.listings.length, updatedAt: s.at ? new Date(s.at).toISOString() : null, ageMinutes: s.at ? Math.round((Date.now() - s.at) / 60e3) : null, ...(p.error ? { error: p.error } : {}) };
+    return { source: c.name, stored: p.found, count: s.listings.length, updatedAt: s.at ? new Date(s.at).toISOString() : null, ageMinutes: s.at ? Math.round((Date.now() - s.at) / 60e3) : null,
+      images: { listingsWithImages: s.listings.filter((l) => l.images.length).length, distinctFirstImages: new Set(s.listings.map((l) => l.images[0]).filter(Boolean)).size, sample: s.listings.slice(0, 3).map((l) => ({ id: l.id, first: l.images[0] ?? null })) }, ...(p.error ? { error: p.error } : {}) };
   }));
-  return { storage: storageInfo(), activeSources: sources.length, totalListings: sources.reduce((n, x) => n + x.count, 0), sources };
+  const lastRun = await readJson<unknown>("meta_lastrun");
+  return { storage: storageInfo(), lastRun, activeSources: sources.length, totalListings: sources.reduce((n, x) => n + x.count, 0), sources };
 }

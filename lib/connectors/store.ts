@@ -63,3 +63,6 @@ export async function probe(key: string): Promise<{ found: boolean; error?: stri
     await fs.access(path.join(DIR, safe(key) + ".json")); return { found: true };
   } catch (e) { return { found: false, error: (e as Error).message.slice(0, 200) }; }
 }
+
+/** Diagnóstico por fuente del último refresco (lo rellenan los conectores; lo lee registry y acaba en /api/status). */
+export const diagnostics = shared("diag", () => ({}) as Record<string, unknown>);
